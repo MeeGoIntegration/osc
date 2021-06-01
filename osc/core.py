@@ -47,6 +47,10 @@ except ImportError:
     from cStringIO import StringIO
     from httplib import IncompleteRead
 
+try:
+    import requests
+except ImportError:
+    pass
 
 try:
     from xml.etree import cElementTree as ET
@@ -3397,10 +3401,116 @@ def http_request(method, url, headers={}, data=None, file=None):
     return fd
 
 
-def http_GET(*args, **kwargs):    return http_request('GET', *args, **kwargs)
-def http_POST(*args, **kwargs):   return http_request('POST', *args, **kwargs)
-def http_PUT(*args, **kwargs):    return http_request('PUT', *args, **kwargs)
-def http_DELETE(*args, **kwargs): return http_request('DELETE', *args, **kwargs)
+# lbt
+_osc_sessions = {}
+
+
+def http_request3(method, url, headers={}, data=None, file=None):
+    """wrapper around urllib2.urlopen for error handling,
+    and to support additional (PUT, DELETE) methods"""
+    def create_memoryview(obj):
+        if sys.version_info < (2, 7, 99):
+            # obj might be a mmap and python 2.7's mmap does not
+            # behave like a bytearray (a bytearray in turn can be used
+            # to create the memoryview). For now simply return a buffer
+            return buffer(obj)
+        return memoryview(obj)
+
+    filefd = None
+
+
+    if conf.config['http_debug']:
+        print('\n\n--', method, url, file=sys.stderr)
+
+    if method == 'POST' and not file and not data:
+        # adding data to an urllib2 request transforms it into a POST
+        data = ''
+
+    api_host_options = {}
+    apiurl = conf.extract_known_apiurl(url)
+    baseheaders = {}
+    if apiurl is not None:
+        # ok no external request
+        api_host_options = conf.get_apiurl_api_host_options(apiurl)
+        for header, value in api_host_options['http_headers']:
+            baseheaders[header] = value
+
+        if apiurl in _osc_sessions:
+            # print(f'found session for {apiurl}', file=sys.stderr)
+            session = _osc_sessions[apiurl]
+        else:
+            options = conf.config['api_host_options'][apiurl]
+            session = requests.Session()
+            _osc_sessions[apiurl] = session
+            user, pw = options['user'], options['pass']
+            session.auth = requests.auth.HTTPBasicAuth(user, pw)
+            # print(f'making session for {apiurl}: {session.auth}', file=sys.stderr)
+    else:
+        print('Making a temporary session', file=sys.stderr)
+        session = requests.Session()
+
+
+    # POST requests are application/x-www-form-urlencoded per default
+    # but sending data requires an octet-stream type
+    if method == 'PUT' or (method == 'POST' and (data or file)):
+        baseheaders['Content-Type'] = 'application/octet-stream'
+
+    if isinstance(headers, type({})):
+        for i in headers.keys():
+            print(headers[i])
+            baseheaders[i] = headers[i]
+
+    if file and not data:
+        size = os.path.getsize(file)
+        if size < 1024*512:
+            data = open(file, 'rb').read()
+        else:
+            import mmap
+            filefd = open(file, 'rb')
+            try:
+                if sys.platform[:3] != 'win':
+                    data = mmap.mmap(filefd.fileno(), os.path.getsize(file), mmap.MAP_SHARED, mmap.PROT_READ)
+                else:
+                    data = mmap.mmap(filefd.fileno(), os.path.getsize(file))
+                data = create_memoryview(data)
+            except EnvironmentError as e:
+                if e.errno == 19:
+                    sys.exit('\n\n%s\nThe file \'%s\' could not be memory mapped. It is ' \
+                             '\non a filesystem which does not support this.' % (e, file))
+                elif hasattr(e, 'winerror') and e.winerror == 5:
+                    # falling back to the default io
+                    data = open(file, 'rb').read()
+                else:
+                    raise
+
+    if conf.config['debug']: print(method, url, file=sys.stderr)
+
+    try:
+        req = requests.Request(method, url, baseheaders)
+        if isinstance(data, str):
+            data = bytes(data, "utf-8")
+        prepped = session.prepare_request(req)
+        # print(method, url, baseheaders, prepped.headers, file=sys.stderr)
+        # stream=True makes send() return a raw urllib3.request.HTTPResponse
+        # decode_content=True means to decode based on content-encoding
+        response = session.send(prepped, stream=True)
+#        print(f"request: {response.request.headers}", file=sys.stderr)
+#        print(f"response: {response.headers}", file=sys.stderr)
+
+    finally:
+        if hasattr(conf.cookiejar, 'save'):
+            conf.cookiejar.save(ignore_discard=True)
+
+    if filefd: filefd.close()
+
+    import io
+    return io.BytesIO(response.content)
+
+
+def http_GET(*args, **kwargs):    return http_request3('GET', *args, **kwargs)
+def http_POST(*args, **kwargs):   return http_request3('POST', *args, **kwargs)
+def http_PUT(*args, **kwargs):    return http_request3('PUT', *args, **kwargs)
+def http_DELETE(*args, **kwargs): return http_request3('DELETE', *args, **kwargs)
 
 
 def check_store_version(dir):
@@ -6050,7 +6160,7 @@ def streamfile(url, http_meth = http_GET, bufsize=8192, data=None, progress_obj=
     until EOF is reached. After each read bufsize bytes are yielded to the
     caller. A spezial usage is bufsize="line" to read line by line (text).
     """
-    cl = ''
+    cl = None
     retries = 0
     # Repeat requests until we get reasonable Content-Length header
     # Server (or iChain) is corrupting data at some point, see bnc#656281
@@ -6060,8 +6170,8 @@ def streamfile(url, http_meth = http_GET, bufsize=8192, data=None, progress_obj=
         retries = retries + 1
         if retries > 1 and conf.config['http_debug']:
             print('\n\nRetry %d --' % (retries - 1), url, file=sys.stderr)
-        f = http_meth.__call__(url, data = data)
-        cl = f.info().get('Content-Length')
+    f = http_meth.__call__(url, data = data)
+        # cl = f.info().get('Content-Length')
 
     if cl is not None:
         # sometimes the proxy adds the same header again
