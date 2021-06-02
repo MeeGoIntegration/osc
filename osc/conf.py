@@ -836,7 +836,7 @@ def get_config(override_conffile=None,
     # okay, we made sure that oscrc exists
 
     # make sure it is not world readable, it may contain a password.
-    os.chmod(conffile, 0o600)
+    # os.chmod(conffile, 0o600)
 
     cp = get_configParser(conffile)
 
