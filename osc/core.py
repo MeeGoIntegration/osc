@@ -3486,9 +3486,9 @@ def http_request3(method, url, headers={}, data=None, file=None):
     if conf.config['debug']: print(method, url, file=sys.stderr)
 
     try:
-        req = requests.Request(method, url, baseheaders)
         if isinstance(data, str):
             data = bytes(data, "utf-8")
+        req = requests.Request(method, url, baseheaders, data=data)
         prepped = session.prepare_request(req)
         # print(method, url, baseheaders, prepped.headers, file=sys.stderr)
         # stream=True makes send() return a raw urllib3.request.HTTPResponse
@@ -3508,7 +3508,7 @@ def http_request3(method, url, headers={}, data=None, file=None):
 
 
 def http_GET(*args, **kwargs):    return http_request3('GET', *args, **kwargs)
-def http_POST(*args, **kwargs):   return http_request('POST', *args, **kwargs)
+def http_POST(*args, **kwargs):   return http_request3('POST', *args, **kwargs)
 def http_PUT(*args, **kwargs):    return http_request3('PUT', *args, **kwargs)
 def http_DELETE(*args, **kwargs): return http_request3('DELETE', *args, **kwargs)
 
