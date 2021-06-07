@@ -3508,7 +3508,7 @@ def http_request3(method, url, headers={}, data=None, file=None):
 
 
 def http_GET(*args, **kwargs):    return http_request3('GET', *args, **kwargs)
-def http_POST(*args, **kwargs):   return http_request3('POST', *args, **kwargs)
+def http_POST(*args, **kwargs):   return http_request('POST', *args, **kwargs)
 def http_PUT(*args, **kwargs):    return http_request3('PUT', *args, **kwargs)
 def http_DELETE(*args, **kwargs): return http_request3('DELETE', *args, **kwargs)
 
